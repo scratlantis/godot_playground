@@ -1,0 +1,15 @@
+[gd_scene load_steps=2 format=3 uid="uid://particle_sim_main"]
+
+[ext_resource type="Script" path="res://scripts/ParticleSim.gd" id="1"]
+
+[node name="ParticleSim" type="Node3D"]
+script = ExtResource("1")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(0.965926, -0.109382, 0.23457, 0, 0.906308, 0.422618, -0.258819, -0.408218, 0.875426, 1.7, 1.6, 3.4)
+current = true
+fov = 60.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.707107, -0.353553, 0.612372, 0, 0.866025, 0.5, -0.707107, -0.353553, 0.612372, 0, 2, 2)
+light_energy = 2.0
