@@ -17,17 +17,28 @@ layout(set = 0, binding = 1, std430) readonly buffer ParticlesIn {
 	vec4 particles_in[];
 };
 
-layout(set = 0, binding = 2, std430) readonly buffer Densities {
+layout(set = 0, binding = 2, std430) readonly buffer PredictedIn {
+	vec4 predicted_in[];
+};
+
+layout(set = 0, binding = 3, std430) readonly buffer Densities {
 	float densities[];
 };
 
-layout(set = 0, binding = 3, std430) writeonly buffer ParticlesOut {
+layout(set = 0, binding = 4, std430) writeonly buffer ParticlesOut {
 	vec4 particles_out[];
+};
+
+layout(set = 0, binding = 5, std430) writeonly buffer PredictedOut {
+	vec4 predicted_out[];
 };
 
 float quadratic_deriv_shape(float dist, float radius)
 {
-	return max(radius - dist, 0.0);
+	if (dist >= radius) {
+		return 0.0;
+	}
+	return dist - radius;
 }
 
 float density_deriv_quadratic(float radius)
@@ -92,6 +103,7 @@ void main()
 	float viscosity_norm = density_norm_smooth(radius);
 
 	vec2 pos = particles_in[id].xy;
+	vec2 predicted_pos = predicted_in[id].xy;
 	vec2 vel = particles_in[id].zw;
 	float density = densities[id];
 	float local_pressure = pressure_from_density(density, target_density, pressure_coef);
@@ -104,8 +116,8 @@ void main()
 			continue;
 		}
 
-		vec2 other_pos = particles_in[other_id].xy;
-		vec2 delta = other_pos - pos;
+		vec2 other_pos = predicted_in[other_id].xy;
+		vec2 delta = other_pos - predicted_pos;
 		float dist2 = dot(delta, delta);
 
 		if (dist2 < radius2 && dist2 > 1e-12) {
@@ -134,5 +146,10 @@ void main()
 	resolve_border_collision(pos, vel, params.bounds, border_damping);
 	vel *= pow(damping, dt * 60.0);
 
+	vec2 predicted_vel = vel;
+	predicted_vel.y += gravity * dt;
+	vec2 next_predicted_pos = pos + predicted_vel * dt;
+
 	particles_out[id] = vec4(pos, vel);
+	predicted_out[id] = vec4(next_predicted_pos, 0.0, 0.0);
 }

@@ -25,6 +25,7 @@ var density_pipeline: RID
 var forces_pipeline: RID
 var params_buffer: RID
 var particle_buffers: Array[RID] = []
+var predicted_buffers: Array[RID] = []
 var density_buffer: RID
 var read_index := 0
 var write_index := 1
@@ -63,6 +64,9 @@ func _exit_tree() -> void:
 	for buffer in particle_buffers:
 		if buffer.is_valid():
 			rd.free_rid(buffer)
+	for buffer in predicted_buffers:
+		if buffer.is_valid():
+			rd.free_rid(buffer)
 	for rid in [params_buffer, density_buffer, density_pipeline, forces_pipeline, density_shader, forces_shader]:
 		if rid.is_valid():
 			rd.free_rid(rid)
@@ -84,6 +88,7 @@ func _create_sim_buffers() -> void:
 	params_buffer = rd.storage_buffer_create(PARAM_BYTES)
 	for i in 2:
 		particle_buffers.append(rd.storage_buffer_create(particle_count * PARTICLE_BYTES))
+		predicted_buffers.append(rd.storage_buffer_create(particle_count * PARTICLE_BYTES))
 	density_buffer = rd.storage_buffer_create(particle_count * DENSITY_BYTES)
 
 func _recreate_sim_buffers() -> void:
@@ -95,6 +100,10 @@ func _recreate_sim_buffers() -> void:
 		if buffer.is_valid():
 			rd.free_rid(buffer)
 	particle_buffers.clear()
+	for buffer in predicted_buffers:
+		if buffer.is_valid():
+			rd.free_rid(buffer)
+	predicted_buffers.clear()
 
 	for rid in [params_buffer, density_buffer]:
 		if rid.is_valid():
@@ -126,6 +135,7 @@ func _seed_particles() -> void:
 
 	if gpu_enabled:
 		rd.buffer_update(particle_buffers[read_index], 0, data.size(), data)
+		rd.buffer_update(predicted_buffers[read_index], 0, data.size(), data)
 
 func _init_param_defs() -> void:
 	param_defs = [
@@ -339,15 +349,17 @@ func _step_gpu(delta: float) -> void:
 
 	var density_set := rd.uniform_set_create([
 		_storage_uniform(0, params_buffer),
-		_storage_uniform(1, particle_buffers[read_index]),
+		_storage_uniform(1, predicted_buffers[read_index]),
 		_storage_uniform(2, density_buffer),
 	], density_shader, 0)
 
 	var forces_set := rd.uniform_set_create([
 		_storage_uniform(0, params_buffer),
 		_storage_uniform(1, particle_buffers[read_index]),
-		_storage_uniform(2, density_buffer),
-		_storage_uniform(3, particle_buffers[write_index]),
+		_storage_uniform(2, predicted_buffers[read_index]),
+		_storage_uniform(3, density_buffer),
+		_storage_uniform(4, particle_buffers[write_index]),
+		_storage_uniform(5, predicted_buffers[write_index]),
 	], forces_shader, 0)
 
 	_dispatch(density_pipeline, density_set)
