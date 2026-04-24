@@ -5,6 +5,8 @@ const WORKGROUP_SIZE := 64
 const PARAM_BYTES := 80
 const PARTICLE_BYTES := 16
 const DENSITY_BYTES := 4
+const DEFAULT_CONFIG_PATH := "res://config/simulation_params_2d.json"
+const USER_CONFIG_PATH := "user://simulation_params_2d.json"
 
 @export_range(16, 8192, 1) var particle_count := 512
 @export_range(0.005, 0.15, 0.001) var particle_radius := 0.045
@@ -29,11 +31,17 @@ var write_index := 1
 var frame_index := 0
 var gpu_enabled := false
 var particles: PackedVector2Array = PackedVector2Array()
+var param_defs: Array[Dictionary] = []
+var param_widgets: Dictionary = {}
+var ui_root: Control
 
 func _ready() -> void:
 	DisplayServer.window_set_title("Particle Sim 2D")
+	_init_param_defs()
+	_load_params()
 	gpu_enabled = _setup_compute()
 	_seed_particles()
+	_build_param_ui()
 
 func _process(delta: float) -> void:
 	if gpu_enabled:
@@ -69,11 +77,34 @@ func _setup_compute() -> bool:
 	forces_shader = _load_shader("res://shaders/particle_forces.glsl")
 	density_pipeline = rd.compute_pipeline_create(density_shader)
 	forces_pipeline = rd.compute_pipeline_create(forces_shader)
+	_create_sim_buffers()
+	return true
+
+func _create_sim_buffers() -> void:
 	params_buffer = rd.storage_buffer_create(PARAM_BYTES)
 	for i in 2:
 		particle_buffers.append(rd.storage_buffer_create(particle_count * PARTICLE_BYTES))
 	density_buffer = rd.storage_buffer_create(particle_count * DENSITY_BYTES)
-	return true
+
+func _recreate_sim_buffers() -> void:
+	if rd == null:
+		_seed_particles()
+		return
+
+	for buffer in particle_buffers:
+		if buffer.is_valid():
+			rd.free_rid(buffer)
+	particle_buffers.clear()
+
+	for rid in [params_buffer, density_buffer]:
+		if rid.is_valid():
+			rd.free_rid(rid)
+
+	read_index = 0
+	write_index = 1
+	frame_index = 0
+	_create_sim_buffers()
+	_seed_particles()
 
 func _seed_particles() -> void:
 	particles.clear()
@@ -95,6 +126,198 @@ func _seed_particles() -> void:
 
 	if gpu_enabled:
 		rd.buffer_update(particle_buffers[read_index], 0, data.size(), data)
+
+func _init_param_defs() -> void:
+	param_defs = [
+		{"name": "particle_count", "label": "Particle Count", "type": "int", "min": 16.0, "max": 4096.0, "step": 16.0, "restart": true},
+		{"name": "particle_radius", "label": "Particle Radius", "type": "float", "min": 0.005, "max": 0.15, "step": 0.001},
+		{"name": "density_coefficient", "label": "Density Coef", "type": "float", "min": 0.0, "max": 2.0, "step": 0.001},
+		{"name": "target_density", "label": "Target Density", "type": "float", "min": 0.0, "max": 2.0, "step": 0.001},
+		{"name": "pressure_force_coefficient", "label": "Pressure Force", "type": "float", "min": 0.0, "max": 2.0, "step": 0.001},
+		{"name": "viscosity_force_coefficient", "label": "Viscosity Force", "type": "float", "min": 0.0, "max": 10.0, "step": 0.001},
+		{"name": "damping", "label": "Particle Damping", "type": "float", "min": 0.0, "max": 1.0, "step": 0.001},
+		{"name": "border_damping", "label": "Border Damping", "type": "float", "min": 0.0, "max": 1.0, "step": 0.001},
+		{"name": "gravity", "label": "Gravity", "type": "float", "min": -4.0, "max": 4.0, "step": 0.001},
+	]
+
+func _build_param_ui() -> void:
+	var layer := CanvasLayer.new()
+	layer.name = "ParameterLayer"
+	add_child(layer)
+
+	ui_root = PanelContainer.new()
+	ui_root.name = "ParameterPanel"
+	ui_root.position = Vector2(16.0, 16.0)
+	ui_root.custom_minimum_size = Vector2(340.0, 0.0)
+	layer.add_child(ui_root)
+
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 12)
+	margin.add_theme_constant_override("margin_top", 10)
+	margin.add_theme_constant_override("margin_right", 12)
+	margin.add_theme_constant_override("margin_bottom", 10)
+	ui_root.add_child(margin)
+
+	var rows := VBoxContainer.new()
+	rows.add_theme_constant_override("separation", 8)
+	margin.add_child(rows)
+
+	for def in param_defs:
+		_add_param_row(rows, def)
+
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	rows.add_child(buttons)
+
+	var save_button := Button.new()
+	save_button.text = "Save"
+	save_button.pressed.connect(_save_params)
+	buttons.add_child(save_button)
+
+	var load_button := Button.new()
+	load_button.text = "Load"
+	load_button.pressed.connect(func() -> void:
+		_load_params()
+		_sync_param_ui()
+		_recreate_sim_buffers()
+	)
+	buttons.add_child(load_button)
+
+	var reset_button := Button.new()
+	reset_button.text = "Reset"
+	reset_button.pressed.connect(func() -> void:
+		_load_params(DEFAULT_CONFIG_PATH)
+		_sync_param_ui()
+		_recreate_sim_buffers()
+	)
+	buttons.add_child(reset_button)
+
+func _add_param_row(parent: VBoxContainer, def: Dictionary) -> void:
+	var key := String(def["name"])
+	var row := VBoxContainer.new()
+	row.add_theme_constant_override("separation", 3)
+	parent.add_child(row)
+
+	var title := HBoxContainer.new()
+	row.add_child(title)
+
+	var name_label := Label.new()
+	name_label.text = String(def["label"])
+	name_label.custom_minimum_size = Vector2(180.0, 0.0)
+	title.add_child(name_label)
+
+	var value_label := Label.new()
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	value_label.custom_minimum_size = Vector2(110.0, 0.0)
+	title.add_child(value_label)
+
+	var control: Range
+	if def.get("type", "float") == "int":
+		var spin := SpinBox.new()
+		spin.min_value = float(def["min"])
+		spin.max_value = float(def["max"])
+		spin.step = float(def["step"])
+		spin.rounded = true
+		control = spin
+	else:
+		var slider := HSlider.new()
+		slider.min_value = float(def["min"])
+		slider.max_value = float(def["max"])
+		slider.step = float(def["step"])
+		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		control = slider
+
+	control.value = float(get(key))
+	control.value_changed.connect(func(value: float) -> void:
+		_set_param_value(key, value, bool(def.get("restart", false)))
+		_update_param_label(key)
+	)
+	row.add_child(control)
+
+	param_widgets[key] = {
+		"control": control,
+		"value_label": value_label,
+		"def": def,
+	}
+	_update_param_label(key)
+
+func _set_param_value(key: String, value: float, restart: bool) -> void:
+	var def := _get_param_def(key)
+	if def.get("type", "float") == "int":
+		set(key, int(round(value)))
+	else:
+		set(key, value)
+
+	if restart:
+		_recreate_sim_buffers()
+
+func _get_param_def(key: String) -> Dictionary:
+	for def in param_defs:
+		if String(def["name"]) == key:
+			return def
+	return {}
+
+func _sync_param_ui() -> void:
+	for key in param_widgets.keys():
+		var entry: Dictionary = param_widgets[key]
+		var control: Range = entry["control"]
+		control.set_value_no_signal(float(get(String(key))))
+		_update_param_label(String(key))
+
+func _update_param_label(key: String) -> void:
+	if not param_widgets.has(key):
+		return
+
+	var entry: Dictionary = param_widgets[key]
+	var def: Dictionary = entry["def"]
+	var label: Label = entry["value_label"]
+	if def.get("type", "float") == "int":
+		label.text = "%d" % int(get(key))
+	else:
+		label.text = "%.3f" % float(get(key))
+
+func _params_to_dict() -> Dictionary:
+	var values := {}
+	for def in param_defs:
+		var key := String(def["name"])
+		values[key] = get(key)
+	return values
+
+func _apply_params(values: Dictionary) -> void:
+	for def in param_defs:
+		var key := String(def["name"])
+		if not values.has(key):
+			continue
+		if def.get("type", "float") == "int":
+			set(key, int(values[key]))
+		else:
+			set(key, float(values[key]))
+
+func _load_params(path: String = "") -> void:
+	var load_path := path
+	if load_path == "":
+		load_path = USER_CONFIG_PATH if FileAccess.file_exists(USER_CONFIG_PATH) else DEFAULT_CONFIG_PATH
+	if not FileAccess.file_exists(load_path):
+		return
+
+	var file := FileAccess.open(load_path, FileAccess.READ)
+	if file == null:
+		push_warning("Could not open parameter file: %s" % load_path)
+		return
+
+	var parsed = JSON.parse_string(file.get_as_text())
+	if typeof(parsed) != TYPE_DICTIONARY:
+		push_warning("Parameter file is not a JSON object: %s" % load_path)
+		return
+
+	_apply_params(parsed)
+
+func _save_params() -> void:
+	var file := FileAccess.open(USER_CONFIG_PATH, FileAccess.WRITE)
+	if file == null:
+		push_warning("Could not write parameter file: %s" % USER_CONFIG_PATH)
+		return
+	file.store_string(JSON.stringify(_params_to_dict(), "\t"))
 
 func _load_shader(path: String) -> RID:
 	var source_text := FileAccess.get_file_as_string(path)

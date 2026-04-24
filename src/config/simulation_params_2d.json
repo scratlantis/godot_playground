@@ -1,0 +1,11 @@
+{
+	"border_damping": 0.72,
+	"damping": 0.998,
+	"density_coefficient": 1.0,
+	"gravity": 0.65,
+	"particle_count": 512,
+	"particle_radius": 0.045,
+	"pressure_force_coefficient": 0.18,
+	"target_density": 0.15,
+	"viscosity_force_coefficient": 0.65
+}
